@@ -428,6 +428,100 @@ and only on real hardware and only after `MALI_DEBUG=n` + a clean savedefconfig 
 
 ---
 
+## F-10 — `build.sh` could not have built Kbase (found by static review)
+
+**Status: FIXED. Not reproduced at runtime** — no kernel has been compiled on any
+host, so this is a defect found by reading the script and by testing its control
+flow against a stubbed tree, not an observed build failure. Category:
+`build-system issue`.
+
+The first `build.sh` (committed as `a7e0d72`) had four independent defects. Any one
+of them would have produced a wrong or missing build, and three of them would have
+failed *silently*:
+
+| # | Defect | Consequence |
+|---|---|---|
+| 1 | Staging used `cp -a "$KBASE_TREE/." "$KERNEL_SRC/drivers/gpu/arm/"` | The payload root contains `drivers/`, `include/`, `Documentation/`, so this created `drivers/gpu/arm/drivers/gpu/arm/midgard/…`. Kbase would not have been built at all. |
+| 2 | `.config` was seeded at step 1, but Kbase's `Kconfig` was only staged at step 3 | The `MALI_*` symbols did not exist when `scripts/config` set them. |
+| 3 | Those failures were swallowed by `2>/dev/null \|\| true` | The build continued with a `.config` containing **no MALI options** and still exited 0. Worst case: a "successful" kernel with no Kbase. |
+| 4 | `scripts/config --set-str` was used for every `CONFIG_*` line | `--set-str` quotes the value, so booleans became `CONFIG_KASAN="y"` — invalid `.config` syntax. `--set-val` is correct for bool/tristate. |
+
+Plus two lesser ones: the staged copy was never removed from the pinned source
+tree, and there was no verification that the config merge worked.
+
+Fixes applied:
+
+- stage the **payload root into the kernel tree root** (defect 1);
+- stage *before* seeding the config (defect 2);
+- replace the `scripts/config` loop with `append fragment` + `make olddefconfig`,
+  then **verify every fragment symbol took effect**, and exit non-zero listing the
+  ones that did not (defect 3, and the new safety net);
+- verification covers three outcomes — all set / symbol absent / value clobbered —
+  and all three were exercised against a stubbed tree.
+
+Verification of the fix is a control-flow test only: `build.sh` was run against a
+fake kernel tree whose `make` is a shell stub. It confirms the staging, wiring,
+merge and refusal logic; it proves nothing about whether Kbase compiles.
+
+## F-11 — In-tree integration requirements, and one hard gate my analysis missed
+
+**Status: VERIFIED by source inspection. NOT_TESTED at build time.** Category:
+`build-system issue` + correction to F-3.
+
+Reading `drivers/gpu/arm/{Makefile,Kbuild}` and `midgard/{Makefile,Kbuild}` in the
+pristine r54p0 extract turned up two things the analysis had wrong or absent.
+
+**(a) A hard gate was missing.** F-3 listed three unconditional `$(error)` gates.
+There are **five**:
+
+| Symbol | midgard/Kbuild | Was it in the fragments? |
+|---|---|---|
+| `CONFIG_DMA_SHARED_BUFFER` | 29-30 | yes |
+| `CONFIG_PM_DEVFREQ` | 33-34 | yes |
+| `CONFIG_DEVFREQ_THERMAL` | 37-38 | yes |
+| **`CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND`** | **41-42** | **NO — added to all four fragments** |
+| `CONFIG_FW_LOADER` | 45-46 | no (satisfied — `MALI_MIDGARD` selects it) |
+
+Two further gates are conditional and only fire if `MALI_PRFCNT_SET_SELECT_VIA_DEBUG_FS`
+(Kbuild:49-51, needs `CONFIG_DEBUG_FS`) or `MALI_FENCE_DEBUG` (55-57, needs
+`CONFIG_SYNC_FILE`) are enabled. No profile enables either.
+
+**(b) `Makefile` shadows `Kbuild`.** Kbase ships *both* files in every directory it
+owns, and kbuild prefers `Makefile`. The `Makefile`s are the Android/out-of-tree
+ones — `midgard/Makefile` starts with `KERNEL_SRC ?= /lib/modules/$(uname -r)/build`
+and `KDIR ?= $(KERNEL_SRC)`. So a plain copy never reaches
+`obj-$(CONFIG_MALI_MIDGARD) += midgard/` at all. `build.sh` now sets the Android
+`Makefile` aside and installs `Kbuild` in its place, inside the disposable fetched
+tree only.
+
+Minimal integration therefore requires: payload root merged into the kernel tree
+root; `drivers/gpu/arm` + `drivers/gpu/arm/midgard` kbuild-ified;
+`source "drivers/gpu/arm/Kconfig"` added to `drivers/gpu/Kconfig`; and
+`obj-$(CONFIG_MALI_MIDGARD) += arm/` added to `drivers/gpu/Makefile`.
+
+Deliberately **not** wired: `drivers/base/arm/` and
+`drivers/hwtracing/coresight/mali/`. They are gated on
+`CONFIG_MALI_MEMORY_GROUP_MANAGER`, `CONFIG_MALI_PROTECTED_MEMORY_ALLOCATOR`,
+`CONFIG_DMA_SHARED_BUFFER_TEST_EXPORTER` and Arm64 coresight — none of which are on
+the program allowlist (§8.3) or enabled by any profile. Wiring them would add
+nothing and widen the config delta.
+
+**A latent vendor bug, recorded but not worked around:**
+`drivers/gpu/arm/Kbuild:21` and `drivers/base/arm/Kbuild:21` contain
+
+```make
+ifeq ($(MALI_CSF_SUPPORT),n)
+    $(error [GPUBUILD-2005] Only CSF builds are supported on this branch)
+endif
+```
+
+`MALI_CSF_SUPPORT` (without the `CONFIG_` prefix) is **never assigned** anywhere in
+the tree — only `CONFIG_MALI_CSF_SUPPORT` is. The variable expands to empty, so
+`ifeq (,n)` is false and the gate never fires. The build will not spuriously fail,
+but this "only CSF builds" guard is currently dead code. It does not change our
+profile choice: `CONFIG_MALI_CSF_SUPPORT=y` is set anyway, per the FAQ and Arm's
+own x86 config. Recorded so nobody later "fixes" it by passing `MALI_CSF_SUPPORT=n`.
+
 ## Consolidated unknowns
 
 1. Whether r54p0 + all six patches compiles on any x86_64 Linux kernel.
@@ -455,3 +549,12 @@ and only on real hardware and only after `MALI_DEBUG=n` + a clean savedefconfig 
     is truncated (UNKNOWN; `research/program-scope.md` §8.4).
 12. Whether `tDRx` actually initialises in the `MALI_NO_MALI` path on x86_64
     (source-supported per F-4, but NOT_TESTED).
+13. Whether the minimal in-tree integration in F-11 is *sufficient*. It is derived
+    from the vendor's own `Kbuild`/`Makefile`/`Kconfig` files by inspection, but no
+    build has confirmed it. Expect the first real build to surface further
+    integration work — `build.sh` step 5/8 is designed to fail loudly and
+    specifically rather than produce a kernel without Kbase.
+14. Whether the newest LTS kernel pairs cleanly with the compiler on the build
+    host (gcc 15.x against a recent kernel is a plausible `-Werror` / API-churn
+    risk; per BUILD-PLAN.md, record the first error rather than silently
+    downgrading).

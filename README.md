@@ -57,18 +57,26 @@ chosen, no `.config` is generated, and no artifact exists. Current state:
 organised on a machine with ~3.8 GB free disk, ~1.6 GB available RAM, and no `bison`,
 which is not a viable kernel build environment. What lives here instead is the
 reproducible *machinery* to run the build elsewhere — a pinned fetcher, a
-patch-preparation script, a shared `build.sh`, a build-host preflight, and the
-written build plan. See `kernel/BUILD-HOST.md` and `kernel/BUILD-PLAN.md`.
+patch-preparation script, a shared `build.sh` with config verification, a build-host
+preflight, a dependency bootstrapper, and the written build plan. A
+`.devcontainer/` is provided so GitHub Codespaces can serve as that host. See
+`kernel/BUILD-HOST.md` and `kernel/BUILD-PLAN.md`.
 
 Quick start on the build host:
 
 ```bash
-./kernel/scripts/preflight.sh          # verify the machine; exits 1 if not ready
-#   fill kernel/sources/kernel.pin with an exact version + checksum
+./kernel/scripts/bootstrap.sh --yes      # install deps, then run preflight.sh
+./kernel/scripts/resolve-kernel-pin.sh   # pick latest LTS from kernel.org, pin it
+#   commit the pin, so the kernel choice is reproducible
 ./kernel/scripts/fetch-kernel.sh
 ./kernel/scripts/apply-patches.sh
 ./kernel/scripts/build.sh --profile baseline
 ```
+
+`build.sh` refuses to compile unless every `CONFIG_*` in the profile fragment
+actually took effect in the merged `.config` — a kernel that quietly lacks Kbase is
+worse than no kernel. Nothing here has been compiled yet: `research/state.md` is
+`NOT_STARTED`.
 
 What *is* established (see `analysis/` and `research/`):
 

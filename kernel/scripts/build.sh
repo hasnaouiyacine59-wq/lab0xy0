@@ -1,19 +1,35 @@
 #!/usr/bin/env bash
 #
-# build.sh --profile <baseline|kasan|kcov|debug>
+# build.sh --profile <baseline|kasan|kcov|debug> [--jobs N] [--restage]
 #
-# ONE shared build entry point for all profiles (preferred over four
-# build-<profile>.sh scripts). Uses one Linux source tree with separate
-# make O=... output directories.
+# ONE shared build entry point for all profiles. One Linux source tree with
+# separate `make O=...` output directories, one Kbase payload staged once.
 #
 # Steps (each logged, nothing hidden):
-#   1. confirm the kernel source tree exists (fetch-kernel.sh)
-#   2. confirm the patched Kbase tree exists (apply-patches.sh)
-#   3. seed build/<profile>/.config from kernel/configs/<profile>.config
-#      merged onto a default kernel config, run Kconfig
-#   4. compile the kernel  (build/<profile>/)
-#   5. build Kbase in-tree against that kernel  (modules under the same O=)
-#   6. emit a build log + config hash + patch-series hash for the manifest
+#   1. stage the Kbase payload into the kernel tree  (see "STAGING" below)
+#   2. kbuild-ify the staged directories             (Makefile/Kbuild precedence)
+#   3. wire drivers/gpu/{Kconfig,Makefile}           (idempotent, tagged)
+#   4. seed build/<profile>/.config: kernel defconfig + the profile fragment
+#   5. VERIFY every CONFIG_* in the fragment actually took   <-- safety net
+#   6. compile the kernel
+#   7. build the Kbase module in-tree (CONFIG_MALI_MIDGARD=m)
+#   8. emit build metadata for the manifest
+#
+# STAGING, and why it is not a plain copy
+# ---------------------------------------
+# The r54p0 payload root `driver/product/kernel/` mirrors the LINUX TREE ROOT:
+# it contains `drivers/`, `include/` and `Documentation/`. So staging merges the
+# payload root into the kernel source root, not into `drivers/gpu/arm/`.
+#
+# Kbase ships BOTH a `Makefile` and a `Kbuild` in every directory it owns.
+# kbuild prefers `Makefile` over `Kbuild` when both exist, and the `Makefile`s
+# here are the Android/out-of-tree ones (they expect KDIR and error otherwise).
+# So the Android `Makefile` is set aside and `Kbuild` is copied over it. This is
+# done ONLY inside the disposable fetched tree; the vendor archive under
+# vendor/arm/ is never modified.
+#
+# To get a pristine tree again:
+#   rm -rf kernel/sources/linux/<version> && kernel/scripts/fetch-kernel.sh
 #
 # Nothing is packaged here; packaging is a later step (see artifacts/README.md).
 # Run on the BUILD host. See ../BUILD-HOST.md.
@@ -22,33 +38,30 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 KERNEL_SRC_ROOT="$REPO_ROOT/kernel/sources/linux"
-KERNEL_SRC=""
 KBASE_TREE="$REPO_ROOT/work/kbase-patched/driver/product/kernel"
-KBASE_SRC_REL="drivers/gpu/arm"
 BUILD_ROOT="$REPO_ROOT/build"
-LOG_DIR="$REPO_ROOT/build/logs"
+LOG_DIR="$BUILD_ROOT/logs"
+
+WIRE_TAG="/* Kbase integration added by kernel/scripts/build.sh -- do not edit */"
 
 die() { printf '\nerror: %s\n' "$*" >&2; exit 1; }
 
-PROFILE=""
-JOBS=""
+PROFILE=""; JOBS=""; RESTAGE=0
 usage() {
     cat <<'EOF'
-Usage: build.sh --profile <baseline|kasan|kcov|debug> [--jobs N]
-
-One shared build entry point. Uses one Linux source tree with separate
-make O=build/<profile> output directories.
+Usage: build.sh --profile <baseline|kasan|kcov|debug> [--jobs N] [--restage]
 
 Options:
   --profile <name>   baseline | kasan | kcov | debug   (required)
   --jobs N           parallel make jobs (default: nproc)
+  --restage          re-stage Kbase into the kernel tree even if already staged
   -h, --help         show this help
 
 Scope reminder (do not duplicate policy; see research/program-scope.md):
-  baseline  control/reproduction          -> aims to conform to the Arm allowlist
-  kasan     memory-safety + validation    -> may conform (CONFIG_KASAN* allowed)
-  kcov      coverage-guided discovery     -> DISCOVERY-ONLY (CONFIG_KCOV not allowlisted)
-  debug     crash/root-cause analysis     -> DISCOVERY-ONLY (DEBUG_* not allowlisted)
+  baseline  control/reproduction          -> INVESTIGATION-ONLY in x86 (DECISION-1)
+  kasan     memory-safety + validation    -> may conform on real HW
+  kcov      coverage-guided discovery     -> DISCOVERY-ONLY
+  debug     crash/root-cause analysis     -> DISCOVERY-ONLY
 
 This compiles; it does not boot, package, or mark any artifact portable.
 EOF
@@ -56,11 +69,12 @@ EOF
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --profile) [ $# -ge 2 ] || { echo "error: --profile needs a value" >&2; exit 2; }; PROFILE="$2"; shift 2 ;;
-        --profile=*) PROFILE="${1#*=}"; shift ;;
-        --jobs) [ $# -ge 2 ] || { echo "error: --jobs needs a value" >&2; exit 2; }; JOBS="$2"; shift 2 ;;
-        --jobs=*) JOBS="${1#*=}"; shift ;;
-        -h|--help) usage; exit 0 ;;
+        --profile)   [ $# -ge 2 ] || { echo "error: --profile needs a value" >&2; exit 2; }; PROFILE="$2"; shift 2 ;;
+        --profile=*) PROFILE="${1#*}"; shift ;;
+        --jobs)      [ $# -ge 2 ] || { echo "error: --jobs needs a value" >&2; exit 2; };    JOBS="$2";   shift 2 ;;
+        --jobs=*)    JOBS="${1#*}"; shift ;;
+        --restage)   RESTAGE=1; shift ;;
+        -h|--help)   usage; exit 0 ;;
         *) echo "error: unknown argument: $1" >&2; usage; exit 2 ;;
     esac
 done
@@ -72,11 +86,13 @@ case "$PROFILE" in
 esac
 [ -n "$JOBS" ] || JOBS=$(nproc)
 
-# --- locate the pinned kernel source -------------------------------------
+# --- locate inputs ---------------------------------------------------------
 PIN="$REPO_ROOT/kernel/sources/kernel.pin"
 [ -f "$PIN" ] || die "kernel.pin missing."
 VER=$(grep -E '^version=' "$PIN" | cut -d= -f2-)
-case "$VER" in ""|UNSET) die "kernel.pin version is UNSET — pin a kernel first." ;; esac
+case "$VER" in ""|UNSET) die "kernel.pin version is UNSET — resolve a pin first:
+       kernel/scripts/resolve-kernel-pin.sh   (or fill kernel.pin by hand)" ;; esac
+
 KERNEL_SRC="$KERNEL_SRC_ROOT/$VER"
 [ -d "$KERNEL_SRC" ] || die "kernel source not found: $KERNEL_SRC
        Run kernel/scripts/fetch-kernel.sh first."
@@ -91,79 +107,189 @@ echo "=============================================================="
 echo " build.sh --profile $PROFILE   (jobs=$JOBS)"
 echo "=============================================================="
 echo "kernel source : $KERNEL_SRC"
-echo "Kbase tree    : $KBASE_TREE"
+echo "Kbase payload : $KBASE_TREE"
 echo "output dir    : $OUT"
 echo "log           : $LOG"
 echo "scope         : see kernel/configs/$PROFILE.config header"
 echo
 
-# --- 1. seed config: default kernel config + profile fragment ------------
+: > "$LOG"
+log() { printf '      %s\n' "$*" | tee -a "$LOG"; }
+note() { printf '\n=== %s ===\n' "$*" | tee -a "$LOG"; }
+
+STAGE_MARK="$KERNEL_SRC/.kbase-staged"
+
+# --- 1. stage the Kbase payload -------------------------------------------
+note "1/8  staging the Kbase payload into the kernel tree"
+
+if [ -f "$STAGE_MARK" ] && [ "$RESTAGE" -eq 0 ]; then
+    log "already staged (marker: $(basename "$STAGE_MARK")); use --restage to redo"
+else
+    [ -f "$KERNEL_SRC/drivers/gpu/arm/midgard/Kbuild" ] && \
+        die "a Kbase tree is already present at $KERNEL_SRC/drivers/gpu/arm but the
+       staging marker is missing. The tree is in an unknown state. Reset it with:
+         rm -rf '$KERNEL_SRC' && kernel/scripts/fetch-kernel.sh"
+    log "merging payload root into kernel tree root"
+    cp -a "$KBASE_TREE/." "$KERNEL_SRC/"
+    [ -d "$KERNEL_SRC/drivers/gpu/arm/midgard" ] \
+        || die "staging did not produce drivers/gpu/arm/midgard — payload layout changed?"
+    # Fingerprint the payload so a changed Kbase is detected on a later build.
+    PAYLOAD_FP=$(find "$KBASE_TREE" -type f -printf '%P\n' | sort \
+                 | while read -r f; do sha256sum "$KBASE_TREE/$f"; done | sha256sum | awk '{print $1}')
+    printf 'payload=%s\nstaged_at=%s\n' "$PAYLOAD_FP" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        > "$STAGE_MARK"
+    log "staged (payload fingerprint $PAYLOAD_FP)"
+fi
+
+# --- 2. kbuild-ify: Makefile shadows Kbuild -------------------------------
+note "2/8  kbuild-ify (kbuild prefers Makefile over Kbuild)"
+for d in drivers/gpu/arm drivers/gpu/arm/midgard; do
+    dir="$KERNEL_SRC/$d"
+    [ -d "$dir" ] || die "expected staged directory missing: $dir"
+    if [ -f "$dir/Kbuild" ] && [ -f "$dir/Makefile" ] \
+       && [ ! -f "$dir/Makefile.android-orig" ]; then
+        mv "$dir/Makefile" "$dir/Makefile.android-orig"
+        cp -a "$dir/Kbuild" "$dir/Makefile"
+        log "$d/Makefile: Android Makefile set aside, Kbuild installed in its place"
+    elif [ -f "$dir/Makefile.android-orig" ]; then
+        log "$d: already kbuild-ified"
+    elif [ -f "$dir/Makefile" ] && [ ! -f "$dir/Kbuild" ]; then
+        log "$d: only a Makefile present, left as-is"
+    else
+        log "$d: nothing to do"
+    fi
+done
+
+# --- 3. wire the kernel side (idempotent, tagged) --------------------------
+note "3/8  wiring drivers/gpu (idempotent)"
+wire_kconfig() {   # $1 = file to append to, $2 = line to ensure
+    local f="$KERNEL_SRC/$1" line="$2"
+    if grep -qxF "$line" "$f"; then
+        log "$1: already wired"
+    else
+        printf '\n%s\n%s\n' "$WIRE_TAG" "$line" >> "$f"
+        log "$1: + $line"
+    fi
+}
+[ -f "$KERNEL_SRC/drivers/gpu/Kconfig" ]  || die "drivers/gpu/Kconfig not found in the kernel tree"
+[ -f "$KERNEL_SRC/drivers/gpu/Makefile" ] || die "drivers/gpu/Makefile not found in the kernel tree"
+
+wire_kconfig drivers/gpu/Kconfig  'source "drivers/gpu/arm/Kconfig"'
+wire_kconfig drivers/gpu/Makefile 'obj-$(CONFIG_MALI_MIDGARD) += arm/'
+
+# --- 4. seed the config ---------------------------------------------------
+note "4/8  seeding $OUT/.config (kernel defconfig + profile fragment)"
 FRAG="$REPO_ROOT/kernel/configs/$PROFILE.config"
 [ -f "$FRAG" ] || die "config fragment missing: $FRAG"
 
-echo "[1/5] seeding $OUT/.config (default kernel config + $PROFILE fragment)"
-if [ ! -f "$OUT/.config" ]; then
-    # Start from the kernel's default config for this arch.
+if [ -f "$OUT/.config" ]; then
+    log "reusing existing $OUT/.config (delete $OUT to reconfigure)"
+else
     ( cd "$KERNEL_SRC" && make O="$OUT" defconfig ) >>"$LOG" 2>&1 \
         || die "defconfig failed — see $LOG"
-    # Merge the profile's MALI_* (and any other) options into .config.
-    # scripts/config, if present, is the least invasive way to set them.
-    if [ -x "$KERNEL_SRC/scripts/config" ]; then
-        while IFS= read -r line; do
-            case "$line" in
-                CONFIG_*=*) "$KERNEL_SRC/scripts/config" --file "$OUT/.config" --set-str "$(echo "$line" | sed 's/^CONFIG_//; s/=.*//')" "$(echo "$line" | cut -d= -f2- | tr -d '"')" 2>/dev/null || true ;;
-            esac
-        done < "$FRAG"
-        echo "      merged CONFIG_*= lines from the fragment via scripts/config"
-    else
-        echo "      NOTE: scripts/config not present; append fragment manually"
-    fi
-    # The authoritative, human-checkable merge is documented in the manifest
-    # step below; the effective config is what actually matters.
-else
-    echo "      reusing existing $OUT/.config (delete $OUT to reconfigure)"
+    # The fragment is already in .config syntax. Appending it and letting
+    # olddefconfig resolve it is more robust than scripts/config, and unknown
+    # symbols are dropped by kconfig (which step 5 then detects).
+    grep -v '^#' "$FRAG" | grep -v '^[[:space:]]*$' >> "$OUT/.config" || true
+    ( cd "$KERNEL_SRC" && make O="$OUT" olddefconfig ) >>"$LOG" 2>&1 \
+        || die "olddefconfig failed after merging the fragment — see $LOG"
+    log "merged fragment via append + olddefconfig"
 fi
-echo "      effective .config sha256: $(sha256sum "$OUT/.config" | awk '{print $1}')"
-echo
 
-# --- 2. build the kernel --------------------------------------------------
-echo "[2/5] building kernel -> $OUT  (this is the long step)"
-( cd "$KERNEL_SRC" && make O="$OUT" -j"$JOBS" ) >>"$LOG" 2>&1
-echo "      kernel build finished (log: $LOG)"
-echo
+# --- 5. VERIFY the fragment actually took ---------------------------------
+note "5/8  verifying every fragment symbol took effect"
 
-# --- 3. build Kbase in-tree (module) --------------------------------------
-echo "[3/5] integrating Kbase and building the module (in-tree, CONFIG_MALI_MIDGARD=m)"
-# Copy the Kbase tree into the kernel source (in-tree external module build).
-# Kbase builds in-tree via drivers/gpu/arm; we stage it under the kernel tree.
-STAGE="$KERNEL_SRC/drivers/gpu/arm"
-mkdir -p "$STAGE"
-cp -a "$KBASE_TREE/." "$STAGE/"
-# The driver path in the kernel Kconfig is referenced by its own Kconfig; wire it
-# in as a normal in-tree gpu/arm driver. (Wiring details are build-phase work.)
-( cd "$KERNEL_SRC" && make O="$OUT" -j"$JOBS" modules ) >>"$LOG" 2>&1 || {
-    echo "      NOTE: module build reported errors; see $LOG" >&2
-    die "Kbase module build failed — see $LOG and analysis/findings.md for the failure categories."
-}
-echo "      module build finished"
-echo
+checked=0; failed=0
+while IFS= read -r line; do
+    case "$line" in
+        '# CONFIG_'*' is not set')
+            sym=$(printf '%s' "$line" | sed -n 's/^# \(CONFIG_[A-Za-z0-9_]*\) is not set$/\1/p')
+            [ -n "$sym" ] || continue
+            checked=$((checked+1))
+            if grep -q "^${sym}=" "$OUT/.config"; then
+                printf '      [ MISMATCH ] %-44s expected unset, found: %s\n' \
+                    "$sym" "$(grep -m1 "^${sym}=" "$OUT/.config")"
+                failed=$((failed+1))
+            else
+                printf '      [ ok      ] %-44s unset\n' "$sym"
+            fi
+            ;;
+        'CONFIG_'*'='*)
+            sym=$(printf '%s' "$line" | cut -d= -f1)
+            want=$(printf '%s' "$line" | cut -d= -f2-)
+            checked=$((checked+1))
+            got=$(grep -m1 "^${sym}=" "$OUT/.config" | cut -d= -f2- || true)
+            if [ -z "$got" ]; then
+                printf '      [ MISSING  ] %-44s wanted %s — symbol not in the Kconfig\n' "$sym" "$want"
+                failed=$((failed+1))
+            elif [ "$got" != "$want" ]; then
+                printf '      [ MISMATCH ] %-44s wanted %s, got %s\n' "$sym" "$want" "$got"
+                failed=$((failed+1))
+            else
+                printf '      [ ok      ] %-44s = %s\n' "$sym" "$got"
+            fi
+            ;;
+    esac
+done < <(grep -v '^[[:space:]]*$' "$FRAG")
 
-# --- 4. summary artifacts for the manifest -------------------------------
-echo "[4/5] recording build metadata"
+log "checked $checked fragment symbols, $failed problem(s)"
+if [ "$checked" -eq 0 ]; then
+    die "the fragment contained no CONFIG_* symbols — refusing to continue."
+fi
+if [ "$failed" -ne 0 ]; then
+    die "$failed fragment symbol(s) did not take effect. The build is NOT
+       trustworthy, so it is stopped here rather than silently producing a
+       kernel without Kbase.
+       Common causes:
+         - Kbase was not staged into the kernel tree (check step 1/2 above)
+         - the kernel version does not expose the symbol
+         - a Kconfig 'depends on' clause is unsatisfied (e.g. MALI_EXPERT must be y
+           before MALI_NO_MALI / LARGE_PAGE_SUPPORT are selectable)
+       See analysis/findings.md."
+fi
+CONFIG_SHA=$(sha256sum "$OUT/.config" | awk '{print $1}')
+log "effective .config sha256: $CONFIG_SHA"
+
+# --- 6. build the kernel --------------------------------------------------
+note "6/8  building the kernel (long step; log: $LOG)"
+( cd "$KERNEL_SRC" && make O="$OUT" -j"$JOBS" ) >>"$LOG" 2>&1 \
+    || die "kernel build failed — see $LOG and analysis/findings.md for the failure categories."
+log "kernel build finished"
+
+# --- 7. build the Kbase module -------------------------------------------
+note "7/8  building modules (Kbase as CONFIG_MALI_MIDGARD=m)"
+( cd "$KERNEL_SRC" && make O="$OUT" -j"$JOBS" modules ) >>"$LOG" 2>&1 \
+    || die "module build failed — see $LOG.
+       First check whether the kbase-ify step and the drivers/gpu wiring took
+       effect; analysis/findings.md records both requirements."
+log "module build finished"
+
+KO_COUNT=$(find "$OUT" -name '*.ko' | wc -l | tr -d ' ')
+log "modules produced: $KO_COUNT"
+
+# --- 8. build metadata for the manifest -----------------------------------
+note "8/8  recording build metadata"
 {
     echo "profile=$PROFILE"
     echo "kernel_version=$VER"
-    echo "config_sha256=$(sha256sum "$OUT/.config" | awk '{print $1}')"
+    echo "kbase_release=r54p0-01eac0"
+    echo "config_sha256=$CONFIG_SHA"
+    echo "fragment_sha256=$(sha256sum "$FRAG" | awk '{print $1}')"
     echo "patch_series_sha256=$(cat "$REPO_ROOT/work/kbase-patched/.patch-series.sha256" 2>/dev/null || echo unknown)"
+    echo "payload_fingerprint=$(awk -F= '/^payload=/{print $2}' "$STAGE_MARK" 2>/dev/null || echo unknown)"
+    echo "kbuildified=drivers/gpu/arm,drivers/gpu/arm/midgard"
+    echo "modules_count=$KO_COUNT"
+    echo "compiler=$(gcc --version 2>/dev/null | head -1)"
     echo "build_host=$(uname -srm)"
     echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "scope=INVESTIGATION-ONLY in this x86 environment (DECISION-1)"
 } > "$OUT/build-metadata.txt"
-cat "$OUT/build-metadata.txt"
-echo
+cat "$OUT/build-metadata.txt" | tee -a "$LOG"
 
-# --- 5. done --------------------------------------------------------------
-echo "[5/5] done for $PROFILE."
+echo
+echo "done for $PROFILE."
 echo "kernel image : $OUT/arch/x86/boot/bzImage  (if present)"
+echo "modules      : $KO_COUNT .ko"
 echo "config       : $OUT/.config"
 echo "metadata     : $OUT/build-metadata.txt"
 echo

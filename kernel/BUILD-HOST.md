@@ -49,12 +49,15 @@ on 8 GB use `-j$(nproc)` cautiously or `-j4`, on 16 GB use `-j$(nproc)`.
 
 ### Toolchain (Debian/Ubuntu package names)
 
+`scripts/bootstrap.sh` installs exactly this list; it is repeated here so the
+document and the machine cannot drift apart.
+
 ```bash
 sudo apt-get update
 sudo apt-get install -y \
     build-essential gcc make flex bison bc libelf-dev libssl-dev \
     libncurses-dev xz-utils cpio kmod rsync zstd git curl ca-certificates \
-    python3 dwarves
+    python3
 ```
 
 - `bison`, `libelf-dev`, `libssl-dev`, `libncurses-dev`, `flex`, `bc`, `cpio`,
@@ -71,13 +74,41 @@ sudo modprobe kvm        # optional; without it QEMU falls back to TCG (slow)
 
 ## What must NOT be assumed
 
-- The Linux version is **not** pinned in this repository yet; it is chosen on the
-  build host per Arm guidance (latest suitable stable/LTS) and recorded in
-  `kernel/sources/kernel.pin`. Do not hard-code a guess.
+- The Linux version is **not** pinned in this repository yet. Resolve it on the
+  build host with `scripts/resolve-kernel-pin.sh`, which implements Arm's "latest
+  stable/longterm" guidance from kernel.org's own metadata, and then **commit the
+  pin** so the choice is reproducible rather than local to one machine.
 - The config fragments in `kernel/configs/` are **provisional**; the real baseline
   `.config` is produced on the build host from a default kernel config plus the
   minimum Kbase requirements.
 - Nothing here has been compiled or booted; `research/state.md` is `NOT_STARTED`.
+
+## GitHub Codespaces as the build host
+
+Codespaces is a workable build host and `.devcontainer/devcontainer.json` is set
+up for it, but four things will bite if they are not handled first.
+
+| Issue | What happens | What to do |
+|---|---|---|
+| **Machine spec** | The 2-core/8 GB spec fails `preflight.sh` (needs ≥25 GB disk, 8–16 GB RAM) | Pick **4 cores / 16 GB / 64 GB**. `hostRequirements` in the devcontainer asks Codespaces to auto-select it. |
+| **No `/dev/kvm`** | `preflight.sh` warns; QEMU falls back to TCG | Expected. Compilation is unaffected. KASAN+KCOV fuzzing will be slow — accept it, or move fuzzing to a dedicated host. |
+| **Auto-stop** | An idle Codespace stops, killing a `make -j` mid-build | Raise/disable the idle timeout before starting a long build, or run under `nohup` and poll. |
+| **SSH remote** | The remote is `git@github.com:...`, so `git clone` needs a key | Add a Codespaces SSH key to the GitHub account, or clone over HTTPS: `https://github.com/hasnaouiyacine59-wq/lab0xy0.git` |
+
+Disk note: one extracted Linux tree plus one `O=` output is ~3 GB. Building several
+profiles at once needs 40 GB+; `build.sh` keeps one shared source tree precisely so
+you can build profiles one at a time and prune between them.
+
+```bash
+bash kernel/scripts/bootstrap.sh --yes          # also runs preflight.sh
+bash kernel/scripts/resolve-kernel-pin.sh --dry-run
+bash kernel/scripts/resolve-kernel-pin.sh
+bash kernel/scripts/preflight.sh                 # expect READY
+git commit -am "pin kernel <version>" && git push
+bash kernel/scripts/fetch-kernel.sh
+bash kernel/scripts/apply-patches.sh
+bash kernel/scripts/build.sh --profile baseline
+```
 
 ## Scope reminder
 

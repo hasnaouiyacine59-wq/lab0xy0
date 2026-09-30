@@ -14,6 +14,10 @@
 # Kernel source trees (large; recreated by kernel/scripts/fetch-kernel.sh)
 /kernel/sources/linux/
 
+# Downloaded kernel tarballs (~140 MB for linux-X.Y.Z.tar.xz). These MUST stay
+# untracked or a careless `git add -A` on the build host will commit them.
+/kernel/sources/cache/
+
 # Kbase working trees (pristine + patched; recreated by
 # kernel/scripts/apply-patches.sh). The pristine extract is never patched
 # in place — the patched copy is a separate tree.

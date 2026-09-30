@@ -1,0 +1,41 @@
+{
+  "name": "lab0xy0 Kbase build host",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+
+  "//": [
+    "Build host for the lab0xy0 Kbase fuzzing project. See kernel/BUILD-HOST.md.",
+    "hostRequirements below is honoured by GitHub Codespaces to auto-select a",
+    "machine that satisfies kernel/scripts/preflight.sh: >=25 GB free disk (40",
+    "preferred) and 8-16 GB RAM. The 2-core/8 GB default spec will NOT pass.",
+    "Expect NO /dev/kvm here, so QEMU falls back to TCG. Compilation is",
+    "unaffected; fuzzing throughput will be poor. That is a known and accepted",
+    "trade-off, not a misconfiguration."
+  ],
+
+  "hostRequirements": {
+    "cpus": 4,
+    "memory": "16gb",
+    "storage": "64gb"
+  },
+
+  "onCreateCommand": "bash kernel/scripts/bootstrap.sh --yes",
+
+  "postCreateCommand": [
+    "git config --global --add safe.directory '*'",
+    "bash kernel/scripts/preflight.sh || true"
+  ],
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "timonwong.shellcheck",
+        "ms-azuretools.vscode-docker"
+      ]
+    }
+  },
+
+  "remoteEnv": {
+    "LC_ALL": "C.UTF-8",
+    "LANG": "C.UTF-8"
+  }
+}
