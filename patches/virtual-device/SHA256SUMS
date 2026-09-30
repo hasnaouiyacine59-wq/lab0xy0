@@ -1,0 +1,6 @@
+3dd4aa225f6f5ed3d64424f5e4d9e38e6e0efb074e156f87067cdc5282945cac  0001-mali-fix-build-error-for-CONFIG_OF-n-for-4.1-kernels.patch
+db7301a6da6ed07acf497c7e054bbc2d42630821c7e5697a1f77d2fdae219136  0002-Fix-x86-build-error-for-missing-asm-arch_timer.h.patch
+9db93cdb67f269aaeeca2cc448f5e248aeb076606fcffc78215e8ddcaad5ccf7  0003-Workaround-arch_timer-funcs-undefined-for-NO_MALI.patch
+7db506f2d651ac82fd086be78612c7726cb1de348d871f905112315d2a5ba7cd  0004-Workaround-no-definition-of-dmb-in-non-Arm-platforms.patch
+530a10017e36793369d3fab4f5d65772f769c7c161bf70533959b444a5565b6d  0005-Fix-unused-function-warnings.patch
+1969eade0171ccc089db002f40983b2617327217f3b9fabd0c74ced1bb0bf83d  0006-Fix-make-clean-when-no-arbitration-code-present.patch

@@ -1,0 +1,50 @@
+# Kernel pin file
+#
+# The build host reads this file to fetch exactly one Linux source tree.
+# It is the only place a kernel version is named.
+#
+# Exactly ONE uncommented `version=`, `url=`, and `sha256=` line must exist
+# below the real values. Everything that is an example is commented out with
+# `#` so it can never be mistaken for the active pin.
+
+version=UNSET
+url=
+sha256=
+
+# ---------------------------------------------------------------------------
+# How to fill this in (on the BUILD host, not on the machine that organises
+# this repository).
+#
+# Arm guidance (research/program-scope.md section 4, VERIFIED): for a new
+# virtual test environment use the latest Android Common Kernel or the latest
+# Linux Kernel stable/longterm release. So pin the newest longterm (LTS)
+# release, unless a documented reason picks otherwise.
+#
+# To discover the current releases and their authoritative checksums:
+#
+#   curl -s https://www.kernel.org/releases.json
+#   curl -s https://cdn.kernel.org/pub/linux/kernel/v6.x/sha256sums.asc
+#
+# Then replace the three real lines at the top of this file with one exact
+# release. Example of the required SHAPE (do not uncomment as-is; the version
+# and checksum below are illustrative only and are NOT verified):
+#
+#   version=6.12.42
+#   url=https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.12.42.tar.xz
+#   sha256=<64-hex value copied from the authoritative sha256sums.asc>
+#
+# ---------------------------------------------------------------------------
+# Rules
+# ---------------------------------------------------------------------------
+# - No floating "latest". `url` must name one exact file.
+# - `sha256` must be non-empty. fetch-kernel.sh refuses to run without it.
+# - Checksum mismatch is fatal; it is never "fixed" by blind re-download.
+# - The pinned version is recorded in the artifact manifest and in
+#   analysis/kernel-compatibility.md, so an artifact always names its kernel.
+# - Changing this file changes the kernel. Do that deliberately and record it.
+#
+# Compatibility note: r54p0's highest observed KERNEL_VERSION gate is 6.13.0,
+# but a gate is NOT a ceiling (see analysis/kernel-compatibility.md). If the
+# chosen latest-LTS kernel fails to build Kbase, record the exact first error
+# (per research/methodology.md failure categories), then try the next justified
+# candidate. Do not silently downgrade.

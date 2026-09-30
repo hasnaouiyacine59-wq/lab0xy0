@@ -1,0 +1,113 @@
+# State ledger
+
+```text
+Current state: NOT_STARTED
+Updated:        2026-09-30
+```
+
+`NOT_STARTED` is correct for this phase. This repository is in the
+**organisation + source-analysis + scope-evidence** phase: nothing has been built,
+booted, loaded, or fuzzed. Evidence gathered so far (source inventory, patch
+applicability, program scope, kernel-version analysis) is real, but it does not
+satisfy any of the build states below — those each require an executed command
+whose output is recorded.
+
+## State ladder
+
+Advance **one** state at a time, and only after that state's verification
+checklist passes.
+
+| State | Exit requires |
+|---|---|
+| `NOT_STARTED` | initial state |
+| `SOURCE_INVENTORIED` | archive checksum recorded, file counts and `MALI_RELEASE_NAME` recorded |
+| `KBASE_IDENTIFIED` | release id, license, build system(s) recorded |
+| `PATCHES_VERIFIED` | per-patch applicability reproduced against pristine source |
+| `PROGRAM_SCOPE_VERIFIED` | program page + configuration guidelines captured into `research/program-scope.md` and `research/documents/` |
+| `KERNEL_COMPATIBILITY_IDENTIFIED` | gate range + ARM GUIDANCE recorded; no build yet required |
+| `MINIMAL_CONFIG_DRAFTED` | provisional config fragments exist and are labelled `PROVISIONAL` |
+| `BASELINE_BUILT` | baseline kernel built and its log kept |
+| `KCOV_BUILT` | kcov kernel built (discovery-only) |
+| `KASAN_BUILT` | kasan kernel built |
+| `DEBUG_BUILT` | debug kernel built |
+| `ROOTFS_BUILT` | minimal rootfs built and packaged |
+| `QEMU_BOOT_VERIFIED` | QEMU boots the packaged kernel |
+| `KBASE_LOAD_VERIFIED` | Kbase module loads in the guest |
+| `KCOV_VERIFIED` | Kbase-side coverage actually observed |
+| `PORTABLE_ARTIFACT_VERIFIED` | artifact copied to a clean location and booted with the original build tree inaccessible |
+| `SYZKALLER_CONNECTED` | syzkaller reuses the packaged artifact |
+| `FUZZING_STARTED` | a fuzzing campaign is running on a packaged artifact |
+
+## Transition log
+
+Append one row per transition. Do not edit or remove earlier rows.
+
+| Date | State | From → To | Command / test | Result | Evidence |
+|---|---|---|---|---|---|
+| 2026-09-30 | `NOT_STARTED` | — → `NOT_STARTED` | n/a | organisation phase; no build performed | this file, `analysis/`, `research/documents/` |
+| 2026-09-30 | `NOT_STARTED` | `NOT_STARTED` → `NOT_STARTED` | `kernel/scripts/preflight.sh` | `NOT READY` (exit 1): disk 3 GB, `bison` missing, pin `UNSET` — host correctly rejected for building | `kernel/BUILD-HOST.md` |
+| 2026-09-30 | `NOT_STARTED` | `NOT_STARTED` → `NOT_STARTED` | `bash -n` on all 4 kernel scripts | pass; `fetch-kernel.sh` refuses with exit 1 and no network call (pin `UNSET`) | `kernel/scripts/README.md` |
+| 2026-09-30 | `NOT_STARTED` | `NOT_STARTED` → `NOT_STARTED` | scope reconciliation from program text (no command; documentation change) | policy bumped to v1.1; EL0-only criterion, Kbase build allowlist, dynamic-config rule captured; 3 decisions locked (DECISION-1/2/3) | `research/program-scope.md`, `analysis/findings.md` |
+| 2026-09-30 | `NOT_STARTED` | `NOT_STARTED` → `NOT_STARTED` | re-read of r54p0 `Kconfig` + `mali_kbase_model_dummy.c` (grep/read only, no build) | `MALI_EXPERT` default `n` (not `y`) and `MALI_DEBUG` default `n` (not `y if DEBUG`) — two documented defaults were wrong and are fixed; latest GPU target = `tDRx` | `analysis/kconfig-dependencies.md`, `analysis/findings.md` F-4 |
+
+To record a transition:
+
+```text
+Date:
+State:
+From -> To:
+Command/test:
+Result:
+Evidence:
+```
+
+## Notes on currently-satisfiable states
+
+The evidence gathered in this phase would appear to justify
+`SOURCE_INVENTORIED`, `KBASE_IDENTIFIED`, `PATCHES_VERIFIED`,
+`PROGRAM_SCOPE_VERIFIED`, and `KERNEL_COMPATIBILITY_IDENTIFIED`. They are **not
+marked reached** because §36 of the project spec requires a formal verification
+checklist per state, and this phase explicitly forbids the building/booting that
+the later states need. The evidence itself is recorded in `analysis/` and
+`research/`; promoting these states is a one-line change once the checklists are
+run and signed off, and is left to the next phase rather than assumed here.
+
+## Resource constraints on future states
+
+The build states are **not** being attempted on the machine that organised this
+repository. Measured here (VERIFIED): 3.8 GB free disk (96% used), 7.4 GB RAM total
+but only ~1.6–2.0 GB available, 4 vCPU, `/dev/kvm` present, and **`bison` missing**
+(plus libelf headers missing and no `qemu-system-x86_64`). A kernel build here
+would fail for environment reasons before it tested anything about Kbase.
+
+The build is therefore **deferred by decision** to a separate build host with
+25–40+ GB free disk and 8–16 GB RAM (`kernel/BUILD-HOST.md`). What was delivered
+instead is the tooling to make that run reproducible elsewhere: `preflight.sh`
+(ran here read-only and correctly reported `NOT READY`), a pinned checksum-verified
+`fetch-kernel.sh`, `apply-patches.sh`, a shared `build.sh`, and `kernel/BUILD-PLAN.md`.
+
+**None of those scripts has run a build, and `fetch-kernel.sh` has performed no
+download** — the pin is still `UNSET`, so it refuses before any network call.
+
+## Scope constraints that shape every future state
+
+Recorded here because they change what a future state may *claim* (details and
+sources in `research/program-scope.md` §8):
+
+- The x86 `MALI_NO_MALI` / `vexpress` environment is **INVESTIGATION/DISCOVERY-ONLY**
+  (DECISION-1). It needs `MALI_PLATFORM_NAME` and a GPU target, neither on the
+  program allowlist, so **no** state above `KBASE_LOAD_VERIFIED` that relies on the
+  virtual harness can be a *validation* environment. This caps what QEMU-based
+  states can prove.
+- `CONFIG_MALI_DEBUG=n` is mandatory, so any Kbase coverage work (F-2) forces a
+  non-conforming build — the `KCOV_VERIFIED` state is therefore a discovery
+  milestone only.
+- Only **EL0 / unprivileged-syscall** exposure is in scope (§8.2).
+- Dynamic configuration must use default module parameters; the permitted `insmod`
+  override list is **truncated** in the available program text (UNKNOWN).
+
+None of this changes `NOT_STARTED`; it constrains how these states may be entered.
+
+On the build host, expect to build one profile, package it, record its checksum,
+then delete the build tree before the next — the `one source tree / many O=
+outputs` design in `artifacts/README.md` exists to make this tractable.
