@@ -58,15 +58,16 @@ organised on a machine with ~3.8 GB free disk, ~1.6 GB available RAM, and no `bi
 which is not a viable kernel build environment. What lives here instead is the
 reproducible *machinery* to run the build elsewhere — a pinned fetcher, a
 patch-preparation script, a shared `build.sh` with config verification, a build-host
-preflight, a dependency bootstrapper, and the written build plan. A
+preflight, a Codespaces/bootstrap setup path, and the written build plan. A
 `.devcontainer/` is provided so GitHub Codespaces can serve as that host. See
 `kernel/BUILD-HOST.md` and `kernel/BUILD-PLAN.md`.
 
 Quick start on the build host:
 
 ```bash
-./kernel/scripts/bootstrap.sh --yes      # install deps, then run preflight.sh
-./kernel/scripts/resolve-kernel-pin.sh   # pick latest LTS from kernel.org, pin it
+./kernel/scripts/codespace-setup.sh --yes  # machine spec, deps, git identity,
+                                           # GitHub access, gh; then preflight.sh
+./kernel/scripts/resolve-kernel-pin.sh     # pick latest LTS from kernel.org, pin it
 #   commit the pin, so the kernel choice is reproducible
 ./kernel/scripts/fetch-kernel.sh
 ./kernel/scripts/apply-patches.sh

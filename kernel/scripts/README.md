@@ -9,6 +9,7 @@ Build machinery for the portable lab. These scripts run on the **build host**
 |---|---|---|
 | `preflight.sh` | yes | yes, read-only (correctly reported `NOT READY`) |
 | `bootstrap.sh` | yes | yes, `--check` mode only (read-only) |
+| `codespace-setup.sh` | yes | yes, all modes, against an **isolated repo copy with a fake `HOME`** and stubbed `apt-get`/`sudo`, so the git-identity / SSH / gh logic was exercised without installing anything or touching this host's keys |
 | `resolve-kernel-pin.sh` | yes | **no** — needs network; the pin is still `UNSET` |
 | `fetch-kernel.sh` | yes | **no** — refuses while the pin is `UNSET`, before any network call |
 | `apply-patches.sh` | yes | **no** — patches were applied during analysis, but not via this script |
@@ -23,8 +24,9 @@ the same as having compiled Kbase; no real kernel has been built anywhere.
 
 | # | Script | What it does | Network? |
 |---|---|---|---|
-| 0a | `bootstrap.sh [--check] [--yes]` | installs the build dependencies (`../BUILD-HOST.md` package list), then runs `preflight.sh` so one command proves the host. `--check` reports only. | apt |
-| 0b | `resolve-kernel-pin.sh [--dry-run] [--force]` | picks the newest kernel.org release marked `longterm` (**that set is the LTS series**), takes its SHA-256 from kernel.org's own `sha256sums.asc`, and writes `kernel/sources/kernel.pin`. Implements Arm's "latest ACK or latest stable/longterm" guidance literally. | yes |
+| 0a | `codespace-setup.sh [--check] [--yes] [--https]` | **Start here on a fresh clone.** Checks the machine spec against `BUILD-HOST.md`, installs the toolchain via `bootstrap.sh`, sets a git identity, arranges GitHub access (SSH key or HTTPS), installs `gh`, then runs `preflight.sh`. `--check` reports only. | apt |
+| 0b | `bootstrap.sh [--check] [--yes]` | installs the build dependencies (`../BUILD-HOST.md` package list), then runs `preflight.sh`. `codespace-setup.sh` calls this, so invoke it directly only if you want just the packages. | apt |
+| 0c | `resolve-kernel-pin.sh [--dry-run] [--force]` | picks the newest kernel.org release marked `longterm` (**that set is the LTS series**), takes its SHA-256 from kernel.org's own `sha256sums.asc`, and writes `kernel/sources/kernel.pin`. Implements Arm's "latest ACK or latest stable/longterm" guidance literally. | yes |
 | 1 | `preflight.sh` | read-only host check (arch, disk, RAM, tools, headers, checksums, pin). Exits non-zero if the host cannot build. | no |
 | 2 | `fetch-kernel.sh` | reads `kernel.pin`, downloads the exact tarball, **verifies SHA-256 (fatal on mismatch)**, extracts to `kernel/sources/linux/<version>/`. No floating "latest". | yes |
 | 3 | `apply-patches.sh` | extracts pristine r54p0 to `work/kbase-pristine/` (never patched in place), copies to `work/kbase-patched/`, applies the six Arm patches in order with `patch -p1`, writes the patch-series hash. | no |
@@ -32,6 +34,22 @@ the same as having compiled Kbase; no real kernel has been built anywhere.
 
 There is deliberately **one** `build.sh --profile …`, not four
 `build-<profile>.sh` scripts.
+
+## What `codespace-setup.sh` exists to solve
+
+A fresh Codespace fails in ways that have nothing to do with kernel building, and
+each failure lands at a confusing moment:
+
+| Problem | Consequence if unhandled |
+|---|---|
+| 2-core/8 GB machine | `preflight.sh` fails on disk/RAM only after you start a build |
+| no git identity | `git commit` of the kernel pin fails — and the pin is what makes the kernel reproducible |
+| no SSH key, but the remote is `git@github.com:` | the clone itself fails |
+| no `gh` | cannot push the resolved pin back without extra manual auth |
+
+It generates an SSH key **and tells you to add the public key** (it cannot add it
+for you), or `--https` to switch the remote instead. It writes git identity
+repo-locally so nothing leaks into unrelated repositories on a shared host.
 
 ## Two things that are easy to get wrong, and are handled here
 

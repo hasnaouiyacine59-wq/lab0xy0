@@ -95,20 +95,40 @@ up for it, but four things will bite if they are not handled first.
 | **Auto-stop** | An idle Codespace stops, killing a `make -j` mid-build | Raise/disable the idle timeout before starting a long build, or run under `nohup` and poll. |
 | **SSH remote** | The remote is `git@github.com:...`, so `git clone` needs a key | Add a Codespaces SSH key to the GitHub account, or clone over HTTPS: `https://github.com/hasnaouiyacine59-wq/lab0xy0.git` |
 
-Disk note: one extracted Linux tree plus one `O=` output is ~3 GB. Building several
-profiles at once needs 40 GB+; `build.sh` keeps one shared source tree precisely so
-you can build profiles one at a time and prune between them.
+`scripts/codespace-setup.sh` handles all four. It is the **first** command to run
+in a fresh Codespace; it installs the toolchain through `bootstrap.sh`, then fixes
+the things that are *not* apt packages and that otherwise fail confusingly:
+
+- **machine spec**, checked before you start a build rather than after;
+- **git identity**, because the step that makes the kernel reproducible
+  (`git commit` of the pin) is the first thing that needs it;
+- **GitHub access** — generates an SSH key and prints the public key for you to
+  add, or `--https` to switch the remote instead;
+- **`gh`**, for pushing the pin back.
+
+The devcontainer runs `bootstrap.sh` in `onCreateCommand` and
+`codespace-setup.sh` in `postCreateCommand`, so a correctly-sized Codespace is
+ready before you type anything.
 
 ```bash
-bash kernel/scripts/bootstrap.sh --yes          # also runs preflight.sh
+bash kernel/scripts/codespace-setup.sh              # start here
+bash kernel/scripts/codespace-setup.sh --check      # report only, change nothing
+bash kernel/scripts/codespace-setup.sh --https      # prefer HTTPS over SSH
 bash kernel/scripts/resolve-kernel-pin.sh --dry-run
 bash kernel/scripts/resolve-kernel-pin.sh
-bash kernel/scripts/preflight.sh                 # expect READY
+bash kernel/scripts/preflight.sh                    # expect READY
 git commit -am "pin kernel <version>" && git push
 bash kernel/scripts/fetch-kernel.sh
 bash kernel/scripts/apply-patches.sh
 bash kernel/scripts/build.sh --profile baseline
 ```
+
+`codespace-setup.sh` deliberately does **not** fetch a kernel, build anything, or
+write the pin. Those stay separate, deliberate steps.
+
+Disk note: one extracted Linux tree plus one `O=` output is ~3 GB. Building several
+profiles at once needs 40 GB+; `build.sh` keeps one shared source tree precisely so
+you can build profiles one at a time and prune between them.
 
 ## Scope reminder
 

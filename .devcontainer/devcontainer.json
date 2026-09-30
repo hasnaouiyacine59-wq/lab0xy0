@@ -4,12 +4,23 @@
 
   "//": [
     "Build host for the lab0xy0 Kbase fuzzing project. See kernel/BUILD-HOST.md.",
+    "",
+    "onCreateCommand     installs the kernel build toolchain (bootstrap.sh).",
+    "postCreateCommand   sets up everything that is NOT an apt package and that",
+    "                    otherwise fails confusingly: machine-spec check, git",
+    "                    identity (needed to commit the kernel pin), GitHub SSH",
+    "                    access, gh CLI, and the preflight verdict",
+    "                    (codespace-setup.sh).",
+    "",
     "hostRequirements below is honoured by GitHub Codespaces to auto-select a",
     "machine that satisfies kernel/scripts/preflight.sh: >=25 GB free disk (40",
     "preferred) and 8-16 GB RAM. The 2-core/8 GB default spec will NOT pass.",
     "Expect NO /dev/kvm here, so QEMU falls back to TCG. Compilation is",
     "unaffected; fuzzing throughput will be poor. That is a known and accepted",
-    "trade-off, not a misconfiguration."
+    "trade-off, not a misconfiguration.",
+    "",
+    "Codespaces auto-stops idle sessions and will kill a running make -j.",
+    "Raise or disable the idle timeout before building."
   ],
 
   "hostRequirements": {
@@ -18,11 +29,11 @@
     "storage": "64gb"
   },
 
-  "onCreateCommand": "bash kernel/scripts/bootstrap.sh --yes",
+  "onCreateCommand": "bash kernel/scripts/bootstrap.sh --yes || true",
 
   "postCreateCommand": [
     "git config --global --add safe.directory '*'",
-    "bash kernel/scripts/preflight.sh || true"
+    "bash kernel/scripts/codespace-setup.sh --yes || true"
   ],
 
   "customizations": {
