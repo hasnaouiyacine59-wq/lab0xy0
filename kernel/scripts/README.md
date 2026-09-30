@@ -24,7 +24,7 @@ the same as having compiled Kbase; no real kernel has been built anywhere.
 
 | # | Script | What it does | Network? |
 |---|---|---|---|
-| 0a | `codespace-setup.sh [--check] [--yes] [--https]` | **Start here on a fresh clone.** Checks the machine spec against `BUILD-HOST.md`, installs the toolchain via `bootstrap.sh`, sets a git identity, arranges GitHub access (SSH key or HTTPS), installs `gh`, then runs `preflight.sh`. `--check` reports only. | apt |
+| 0a | `codespace-setup.sh [--check] [--yes] [--https]` | **Start here on a fresh clone/Codespace.** Checks the machine spec against `BUILD-HOST.md`, installs the toolchain via `bootstrap.sh`, sets a git identity, arranges GitHub access (SSH key or HTTPS), installs `gh`, then runs `preflight.sh`. `--check` reports only. | apt |
 | 0b | `bootstrap.sh [--check] [--yes]` | installs the build dependencies (`../BUILD-HOST.md` package list), then runs `preflight.sh`. `codespace-setup.sh` calls this, so invoke it directly only if you want just the packages. | apt |
 | 0c | `resolve-kernel-pin.sh [--dry-run] [--force]` | picks the newest kernel.org release marked `longterm` (**that set is the LTS series**), takes its SHA-256 from kernel.org's own `sha256sums.asc`, and writes `kernel/sources/kernel.pin`. Implements Arm's "latest ACK or latest stable/longterm" guidance literally. | yes |
 | 1 | `preflight.sh` | read-only host check (arch, disk, RAM, tools, headers, checksums, pin). Exits non-zero if the host cannot build. | no |

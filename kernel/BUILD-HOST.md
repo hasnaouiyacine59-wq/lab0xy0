@@ -85,30 +85,19 @@ sudo modprobe kvm        # optional; without it QEMU falls back to TCG (slow)
 
 ## GitHub Codespaces as the build host
 
-Codespaces is a workable build host and `.devcontainer/devcontainer.json` is set
-up for it, but four things will bite if they are not handled first.
+Codespaces is a workable build host, but five things will bite if they are not
+handled first.
 
 | Issue | What happens | What to do |
 |---|---|---|
-| **Machine spec** | The 2-core/8 GB spec fails `preflight.sh` (needs ≥25 GB disk, 8–16 GB RAM) | Pick **4 cores / 16 GB / 64 GB**. `hostRequirements` in the devcontainer asks Codespaces to auto-select it. |
+| **Machine spec** | The 2-core/8 GB spec fails `preflight.sh` (needs ≥25 GB disk, 8–16 GB RAM) | Pick **4 cores / 16 GB / 64 GB** by hand when creating the codespace. There is deliberately **no `.devcontainer/`**: a devcontainer that declares `hostRequirements` fails codespace creation outright on accounts where that machine type is not offered ("no machine types are available"), and that failure blocks the whole host. |
 | **No `/dev/kvm`** | `preflight.sh` warns; QEMU falls back to TCG | Expected. Compilation is unaffected. KASAN+KCOV fuzzing will be slow — accept it, or move fuzzing to a dedicated host. |
 | **Auto-stop** | An idle Codespace stops, killing a `make -j` mid-build | Raise/disable the idle timeout before starting a long build, or run under `nohup` and poll. |
 | **SSH remote** | The remote is `git@github.com:...`, so `git clone` needs a key | Add a Codespaces SSH key to the GitHub account, or clone over HTTPS: `https://github.com/hasnaouiyacine59-wq/lab0xy0.git` |
+| **Toolchain / identity** | Fresh image has no kernel build deps and no git identity | `scripts/codespace-setup.sh` — below. |
 
-`scripts/codespace-setup.sh` handles all four. It is the **first** command to run
-in a fresh Codespace; it installs the toolchain through `bootstrap.sh`, then fixes
-the things that are *not* apt packages and that otherwise fail confusingly:
-
-- **machine spec**, checked before you start a build rather than after;
-- **git identity**, because the step that makes the kernel reproducible
-  (`git commit` of the pin) is the first thing that needs it;
-- **GitHub access** — generates an SSH key and prints the public key for you to
-  add, or `--https` to switch the remote instead;
-- **`gh`**, for pushing the pin back.
-
-The devcontainer runs `bootstrap.sh` in `onCreateCommand` and
-`codespace-setup.sh` in `postCreateCommand`, so a correctly-sized Codespace is
-ready before you type anything.
+Create the codespace from the default Codespaces image; nothing in this repository
+is required for it to work. Then:
 
 ```bash
 bash kernel/scripts/codespace-setup.sh              # start here
@@ -122,6 +111,18 @@ bash kernel/scripts/fetch-kernel.sh
 bash kernel/scripts/apply-patches.sh
 bash kernel/scripts/build.sh --profile baseline
 ```
+
+Because there is no devcontainer, `codespace-setup.sh` is what installs the
+toolchain — run it once, first. It handles the non-package prerequisites that
+otherwise fail confusingly:
+
+- **machine spec**, checked before you start a build rather than after — this is
+  now your only guard, since nothing auto-selects a big enough machine;
+- **git identity**, because the step that makes the kernel reproducible
+  (`git commit` of the pin) is the first thing that needs it;
+- **GitHub access** — generates an SSH key and prints the public key for you to
+  add, or `--https` to switch the remote instead;
+- **`gh`**, for pushing the pin back.
 
 `codespace-setup.sh` deliberately does **not** fetch a kernel, build anything, or
 write the pin. Those stay separate, deliberate steps.

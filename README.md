@@ -58,9 +58,10 @@ organised on a machine with ~3.8 GB free disk, ~1.6 GB available RAM, and no `bi
 which is not a viable kernel build environment. What lives here instead is the
 reproducible *machinery* to run the build elsewhere — a pinned fetcher, a
 patch-preparation script, a shared `build.sh` with config verification, a build-host
-preflight, a Codespaces/bootstrap setup path, and the written build plan. A
-`.devcontainer/` is provided so GitHub Codespaces can serve as that host. See
-`kernel/BUILD-HOST.md` and `kernel/BUILD-PLAN.md`.
+preflight, and a Codespaces setup script. GitHub Codespaces can serve as that host;
+see `kernel/BUILD-HOST.md` and `kernel/BUILD-PLAN.md`. There is deliberately no
+`.devcontainer/`, so create the codespace from the default image and pick
+**4 cores / 16 GB / 64 GB** yourself.
 
 Quick start on the build host:
 

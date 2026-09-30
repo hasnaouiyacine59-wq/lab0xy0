@@ -522,6 +522,45 @@ but this "only CSF builds" guard is currently dead code. It does not change our
 profile choice: `CONFIG_MALI_CSF_SUPPORT=y` is set anyway, per the FAQ and Arm's
 own x86 config. Recorded so nobody later "fixes" it by passing `MALI_CSF_SUPPORT=n`.
 
+## F-12 — `.devcontainer/` blocked Codespace creation; removed
+
+**Status: FIXED by removal.** Category: `build-host / CI configuration`.
+
+A `.devcontainer/devcontainer.json` (Ubuntu 24.04 image, with
+`hostRequirements` of 4 cpu / 16 gb / 64 gb) was committed in `b348b58`. Attempting
+to create a Codespace from this repository failed:
+
+```text
+A codespace cannot be created because no machine types are available.
+You may need to select a different branch, modify your container
+configuration, or adjust your organization's policy settings.
+```
+
+This is a **Codespace provisioning failure**, not a defect in any kernel script.
+The declared `hostRequirements` combination is not offered by this account, and
+GitHub fails closed: rather than falling back to a smaller machine, it refuses to
+create the codespace at all. A devcontainer cannot fix a machine-availability or
+org-policy problem — declaring the requirements only converted "too small machine"
+into "no codespace at all".
+
+Resolved by **deleting `.devcontainer/`** (commit after `b348b58`). Codespaces
+works without one: create the codespace from the default Codespaces image and pick
+**4 cores / 16 GB / 64 GB** manually in the UI.
+
+Consequences, and why this is not a regression:
+
+- Nothing in the repository needed the devcontainer. It was convenience only.
+- The toolchain install it performed in `onCreateCommand` is now done by
+  `kernel/scripts/codespace-setup.sh`, which is the documented first command on a
+  fresh host and covers strictly more (toolchain **plus** machine-spec check, git
+  identity, GitHub access, `gh`, preflight verdict).
+- The machine-spec check that `hostRequirements` used to automate is now performed
+  by `codespace-setup.sh`, which fails loudly *before* a build instead of
+  preventing the codespace from existing.
+- Do not re-add `hostRequirements`. If automatic machine selection is wanted
+  again, it must be validated against the account's actual available machine types
+  first — an unmatchable requirement blocks the entire build host.
+
 ## Consolidated unknowns
 
 1. Whether r54p0 + all six patches compiles on any x86_64 Linux kernel.
@@ -558,3 +597,7 @@ own x86 config. Recorded so nobody later "fixes" it by passing `MALI_CSF_SUPPORT
     host (gcc 15.x against a recent kernel is a plausible `-Werror` / API-churn
     risk; per BUILD-PLAN.md, record the first error rather than silently
     downgrading).
+15. Which Codespace machine types this account actually offers. F-12 shows the
+    consequence of assuming: an unmatchable `hostRequirements` made the codespace
+    uncreatable. Machine size must be chosen in the UI and confirmed by
+    `codespace-setup.sh` before any build.

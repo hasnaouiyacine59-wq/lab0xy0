@@ -18,7 +18,7 @@
 # deliberate steps (see ../BUILD-HOST.md).
 #
 #   --check   report only; change nothing and install nothing
-#   --yes     non-interactive (for devcontainer onCreateCommand / CI)
+#   --yes     non-interactive (for CI or a scripted setup)
 #   --https   switch the origin remote to HTTPS instead of relying on SSH
 #
 # Exit codes:  0 ready   1 something is still wrong   2 usage error

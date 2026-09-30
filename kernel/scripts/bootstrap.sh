@@ -6,8 +6,8 @@
 # running preflight.sh. Idempotent: re-running is cheap and safe.
 #
 #   --check   report what is missing, install nothing (exit 1 if anything is)
-#   --yes     do not prompt before installing (for non-interactive use, e.g. a
-#             devcontainer onCreateCommand)
+#   --yes     do not prompt before installing (for non-interactive use, e.g. CI
+#             or codespace-setup.sh)
 #
 # The package list is the one in ../BUILD-HOST.md; keeping it here as well means
 # the docs and the machine cannot drift apart, because preflight.sh checks the
